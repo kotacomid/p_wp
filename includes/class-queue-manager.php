@@ -254,6 +254,9 @@ class KotacomAI_Queue_Manager {
             case 'generate_content':
                 return $this->process_content_generation($item['data']);
                 
+            case 'create_post_from_content':
+                return $this->process_post_creation_from_content($item['data']);
+                
             case 'generate_image':
                 return $this->process_image_generation($item['data']);
                 
@@ -375,6 +378,63 @@ class KotacomAI_Queue_Manager {
             }
             
             throw new Exception('Fatal error during content generation: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Process post creation from ready content (used for template processing)
+     */
+    private function process_post_creation_from_content($data) {
+        try {
+            // Extract data
+            $keyword = isset($data['keyword']) ? sanitize_text_field($data['keyword']) : '';
+            $content = isset($data['content']) ? $data['content'] : '';
+            $params = isset($data['params']) && is_array($data['params']) ? $data['params'] : array();
+            
+            if (empty($keyword) || empty($content)) {
+                throw new Exception('Missing keyword or content in queue data');
+            }
+            
+            // Generate title from keyword
+            $title = $this->generate_post_title($keyword, $content);
+            
+            // Create post data
+            $post_data = array(
+                'post_title' => $title,
+                'post_content' => $content,
+                'post_status' => $data['post_status'] ?? 'draft',
+                'post_type' => $data['post_type'] ?? 'post',
+                'post_author' => get_current_user_id()
+            );
+            
+            // Insert post
+            $post_id = wp_insert_post($post_data);
+            
+            if (is_wp_error($post_id)) {
+                throw new Exception('Failed to create post: ' . $post_id->get_error_message());
+            }
+            
+            // Add categories and tags
+            if (!empty($data['categories'])) {
+                wp_set_post_categories($post_id, $data['categories']);
+            }
+            
+            if (!empty($data['tags'])) {
+                wp_set_post_tags($post_id, explode(',', $data['tags']));
+            }
+            
+            return array(
+                'success' => true,
+                'post_id' => $post_id,
+                'keyword' => $keyword,
+                'title' => $title,
+                'edit_link' => get_edit_post_link($post_id),
+                'view_link' => get_permalink($post_id)
+            );
+            
+        } catch (Exception $e) {
+            error_log('KotacomAI Queue: Post creation failed - ' . $e->getMessage());
+            throw $e;
         }
     }
     

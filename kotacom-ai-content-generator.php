@@ -1443,13 +1443,28 @@ class KotacomAI {
             $batch_id = 'batch_' . time() . '_' . wp_generate_password(8, false);
             
             foreach ($keywords as $keyword) {
-                // Create AI prompt by replacing template placeholders
-                $ai_prompt = $this->create_ai_prompt_from_template($template_content, $keyword, $parameters);
+                // Process template content directly (shortcodes + HTML) instead of creating AI prompt
+                if (method_exists($this->template_manager, 'process_template_content')) {
+                    $processed_content = $this->template_manager->process_template_content($template_content, $keyword, $parameters);
+                } else {
+                    // Fallback to manual processing if method doesn't exist
+                    global $kotacom_ai_current_keyword;
+                    $kotacom_ai_current_keyword = $keyword;
+                    
+                    $content = str_replace('{keyword}', $keyword, $template_content);
+                    $content = str_replace('{date}', date('F j, Y'), $content);
+                    $content = str_replace('{year}', date('Y'), $content);
+                    $content = str_replace('{site_name}', get_bloginfo('name'), $content);
+                    
+                    $processed_content = do_shortcode($content);
+                    
+                    unset($kotacom_ai_current_keyword);
+                }
                 
                 // Add to queue using queue manager
-                $queue_item_id = $this->queue_manager->add_single_item_to_queue('generate_content', array(
+                $queue_item_id = $this->queue_manager->add_single_item_to_queue('create_post_from_content', array(
                     'keyword' => $keyword,
-                    'prompt' => $ai_prompt,
+                    'content' => $processed_content,
                     'params' => $parameters,
                     'create_post' => true,
                     'post_status' => $post_settings['post_status'] ?? 'draft',
@@ -1494,19 +1509,28 @@ class KotacomAI {
             }
             
         } else {
-            // Single generation - process immediately
+            // Single generation - process template directly with shortcodes
             $keyword = $keywords[0];
             
-            // Create AI prompt by replacing template placeholders
-            $ai_prompt = $this->create_ai_prompt_from_template($template_content, $keyword, $parameters);
-            
-            // Generate content immediately
-            $generation_result = $this->api_handler->generate_content($ai_prompt, $parameters);
-            
-            if ($generation_result['success']) {
-                // Replace template placeholders in generated content
-                $final_content = str_replace('{keyword}', $keyword, $generation_result['content']);
+            // Process template content directly (shortcodes + HTML)
+            if (method_exists($this->template_manager, 'process_template_content')) {
+                $final_content = $this->template_manager->process_template_content($template_content, $keyword, $parameters);
+            } else {
+                // Fallback to manual processing if method doesn't exist
+                global $kotacom_ai_current_keyword;
+                $kotacom_ai_current_keyword = $keyword;
                 
+                $content = str_replace('{keyword}', $keyword, $template_content);
+                $content = str_replace('{date}', date('F j, Y'), $content);
+                $content = str_replace('{year}', date('Y'), $content);
+                $content = str_replace('{site_name}', get_bloginfo('name'), $content);
+                
+                $final_content = do_shortcode($content);
+                
+                unset($kotacom_ai_current_keyword);
+            }
+            
+            if (!empty($final_content)) {
                 // Create the post
                 $post_data = array(
                     'post_title' => $keyword,
@@ -1541,7 +1565,7 @@ class KotacomAI {
                     wp_send_json_error(array('message' => __('Failed to create post', 'kotacom-ai')));
                 }
             } else {
-                wp_send_json_error(array('message' => $generation_result['error']));
+                wp_send_json_error(array('message' => __('Failed to process template content', 'kotacom-ai')));
             }
         }
         

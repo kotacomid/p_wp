@@ -681,28 +681,20 @@ class KotacomAI_Template_Manager {
         error_log('KotacomAI: Previewing with keyword: ' . $keyword);
         error_log('KotacomAI: Previewing with variables: ' . print_r($variables, true));
 
-        // Set global keyword for shortcode processing context
-        global $kotacom_ai_current_keyword;
-        $kotacom_ai_current_keyword = $keyword;
-
-        // Replace variables in content
-        $preview_content = $content;
+        // Convert variables format for processing
+        $processed_variables = array();
         if (is_array($variables)) {
             foreach ($variables as $key => $data) {
-                $value = $data['default'] ?? ''; // Use default value from variable manager
-                $preview_content = str_replace('{' . $key . '}', sanitize_text_field($value), $preview_content);
+                $processed_variables[$key] = $data['default'] ?? '';
             }
         }
 
-        error_log('KotacomAI: Content before shortcode processing: ' . $preview_content);
+        error_log('KotacomAI: Content before processing: ' . $content);
 
-        // Process shortcodes
-        $preview_content = do_shortcode($preview_content);
+        // Use the new template processing method
+        $preview_content = $this->process_template_content($content, $keyword, $processed_variables);
 
-        error_log('KotacomAI: Content after shortcode processing: ' . $preview_content);
-
-        // Clear global keyword
-        unset($kotacom_ai_current_keyword);
+        error_log('KotacomAI: Content after processing: ' . $preview_content);
 
         wp_send_json_success(array('preview' => $preview_content));
         error_log('KotacomAI: ajax_preview_template finished successfully.');
@@ -895,6 +887,37 @@ class KotacomAI_Template_Manager {
         foreach ($variables as $key => $value) {
             $content = str_replace('{' . $key . '}', $value, $content);
         }
+        
+        // Process shortcodes and generate AI content
+        $final_content = do_shortcode($content);
+
+        // Clear global keyword
+        unset($kotacom_ai_current_keyword);
+        
+        return $final_content;
+    }
+    
+    /**
+     * Process template content directly (for immediate template processing)
+     */
+    public function process_template_content($template_content, $keyword, $variables = array()) {
+        // Set global keyword for shortcode processing context
+        global $kotacom_ai_current_keyword;
+        $kotacom_ai_current_keyword = $keyword;
+
+        // Replace keyword
+        $content = str_replace('{keyword}', $keyword, $template_content);
+        
+        // Replace variables
+        foreach ($variables as $key => $value) {
+            $content = str_replace('{' . $key . '}', $value, $content);
+        }
+        
+        // Add common template variables
+        $content = str_replace('{date}', date('F j, Y'), $content);
+        $content = str_replace('{year}', date('Y'), $content);
+        $content = str_replace('{month}', date('F'), $content);
+        $content = str_replace('{site_name}', get_bloginfo('name'), $content);
         
         // Process shortcodes and generate AI content
         $final_content = do_shortcode($content);
