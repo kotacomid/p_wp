@@ -195,11 +195,17 @@ class KotacomAI_API_Handler {
         $api_key = $kotacom_ai->api_key_rotator->get_next_available_key($provider);
         
         if (empty($api_key)) {
+            // Debug: Check what keys are available
+            $available_keys = $kotacom_ai->api_key_rotator->get_provider_keys($provider);
+            error_log("KotacomAI API Handler: No API key found for provider: $provider. Available keys count: " . count($available_keys));
+            
             return array(
                 'success' => false,
-                'error' => __('No API keys configured for this provider', 'kotacom-ai')
+                'error' => __('No API keys configured for this provider. Please add API keys in the API Rotator.', 'kotacom-ai')
             );
         }
+        
+        error_log("KotacomAI API Handler: Using API key for provider: $provider (key length: " . strlen($api_key) . ")");
         
         // Build the final prompt with parameters
         $final_prompt = $this->build_prompt($prompt, $parameters);
@@ -256,17 +262,26 @@ class KotacomAI_API_Handler {
             }
             
             // Check if error indicates rate limiting and we can rotate
+            error_log("KotacomAI API Handler: API call failed, checking for rate limit. Error: " . $result['error']);
             $rotation_result = $kotacom_ai->api_key_rotator->handle_api_error($provider, $result['error']);
             
             if ($rotation_result['rotated']) {
-                // Get the new API key and try again
-                $api_key = $rotation_result['new_key'];
+                // Get the new API key using the same method as initial call
+                $api_key = $kotacom_ai->api_key_rotator->get_next_available_key($provider);
+                
+                if (empty($api_key)) {
+                    error_log("KotacomAI API Handler: No more API keys available after rotation");
+                    break;
+                }
+                
+                error_log("KotacomAI API Handler: Rotated to new API key (length: " . strlen($api_key) . "). Attempt $attempt of $max_retries");
                 
                 // Add a small delay before retrying
                 sleep(1);
                 
                 continue; // Retry with new key
             } else {
+                error_log("KotacomAI API Handler: No rotation performed. Reason: " . $rotation_result['message']);
                 // No rotation possible or error is not rate limit related
                 break;
             }

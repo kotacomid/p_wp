@@ -378,6 +378,7 @@ class KotacomAI {
         add_action('wp_ajax_kotacom_test_all_keys', array($this, 'ajax_test_all_keys'));
         add_action('wp_ajax_kotacom_get_rotation_stats', array($this, 'ajax_get_rotation_stats'));
         add_action('wp_ajax_kotacom_get_provider_keys', array($this, 'ajax_get_provider_keys'));
+        add_action('wp_ajax_kotacom_debug_api_keys', array($this, 'ajax_debug_api_keys'));
     }
     
     /**
@@ -2090,6 +2091,21 @@ class KotacomAI {
         }, $keys, array_keys($keys));
         
         wp_send_json_success(['keys' => $masked_keys]);
+    }
+    
+    /**
+     * Debug API keys configuration
+     */
+    public function ajax_debug_api_keys() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('Insufficient permissions', 'kotacom-ai')));
+        }
+        
+        $provider = sanitize_text_field($_POST['provider'] ?? get_option('kotacom_ai_api_provider', 'google_ai'));
+        
+        $debug_info = $this->api_key_rotator->debug_api_keys($provider);
+        
+        wp_send_json_success($debug_info);
     }
 }
 

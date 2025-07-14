@@ -10,6 +10,8 @@ if (!defined('ABSPATH')) {
 
 class KotacomAI_API_Key_Rotator {
     
+    private $debug_logging = true; // Set to false to disable verbose logging
+    
     private $rate_limit_errors = array(
         'quota exceeded',
         'rate limit',
@@ -24,8 +26,27 @@ class KotacomAI_API_Key_Rotator {
         'requests per day',
         'monthly quota exceeded',
         'billing quota exceeded',
-        'api rate limit exceeded'
+        'api rate limit exceeded',
+        '429',  // HTTP status code for Too Many Requests
+        'resource_exhausted',  // Google API
+        'usage_limit_exceeded',
+        'daily_limit_exceeded',
+        'minute_quota_exceeded',
+        'hour_quota_exceeded',
+        'request_limit_exceeded',
+        'tokens_per_minute_exceeded',
+        'concurrent_requests_exceeded',
+        'bandwidth_limit_exceeded'
     );
+    
+    /**
+     * Debug logging helper
+     */
+    private function debug_log($message) {
+        if ($this->debug_logging) {
+            error_log($message);
+        }
+    }
     
     /**
      * Get active API key for provider
@@ -56,18 +77,28 @@ class KotacomAI_API_Key_Rotator {
         // Get multiple keys (new format)
         $multiple_keys = get_option("kotacom_ai_{$provider}_api_keys", array());
         
+        // Debug logging
+        $this->debug_log("KotacomAI API Rotator: Getting keys for provider: $provider");
+        $this->debug_log("KotacomAI API Rotator: Multiple keys option (kotacom_ai_{$provider}_api_keys): " . print_r($multiple_keys, true));
+        
         // Fallback to single key (legacy format)
         if (empty($multiple_keys)) {
             $single_key = get_option("kotacom_ai_{$provider}_api_key", '');
+            error_log("KotacomAI API Rotator: No multiple keys found, checking single key option (kotacom_ai_{$provider}_api_key): " . (!empty($single_key) ? 'Found' : 'Empty'));
+            
             if (!empty($single_key)) {
                 return array($single_key);
             }
         }
         
         // Filter out empty keys
-        return array_filter($multiple_keys, function($key) {
+        $filtered_keys = array_filter($multiple_keys, function($key) {
             return !empty(trim($key));
         });
+        
+        error_log("KotacomAI API Rotator: Filtered keys count: " . count($filtered_keys));
+        
+        return $filtered_keys;
     }
     
     /**
@@ -122,14 +153,33 @@ class KotacomAI_API_Key_Rotator {
     public function rotate_api_key($provider, $reason = '') {
         $keys = $this->get_provider_keys($provider);
         
+        error_log("KotacomAI API Rotator: Attempting rotation for provider: $provider. Available keys: " . count($keys));
+        
         if (count($keys) <= 1) {
+            error_log("KotacomAI API Rotator: Cannot rotate - only " . count($keys) . " key(s) available");
             return false; // No keys to rotate to
         }
         
         $current_index = get_option("kotacom_ai_{$provider}_active_key_index", 0);
         $next_index = ($current_index + 1) % count($keys);
         
+        // Check if next key is in cooldown
+        if ($this->is_key_in_cooldown($provider, $next_index)) {
+            error_log("KotacomAI API Rotator: Next key (index $next_index) is in cooldown, finding available key");
+            
+            // Find a key that's not in cooldown
+            for ($i = 0; $i < count($keys); $i++) {
+                $test_index = ($current_index + $i + 1) % count($keys);
+                if (!$this->is_key_in_cooldown($provider, $test_index)) {
+                    $next_index = $test_index;
+                    break;
+                }
+            }
+        }
+        
         update_option("kotacom_ai_{$provider}_active_key_index", $next_index);
+        
+        error_log("KotacomAI API Rotator: Rotated from index $current_index to index $next_index");
         
         // Log the rotation
         $this->log_key_rotation($provider, $current_index, $next_index, $reason);
@@ -159,16 +209,20 @@ class KotacomAI_API_Key_Rotator {
      * Handle API error and rotate if needed
      */
     public function handle_api_error($provider, $error_message) {
+        error_log("KotacomAI API Rotator: Checking error for rate limit - " . $error_message);
+        
         if ($this->is_rate_limit_error($error_message)) {
-            $rotated = $this->rotate_api_key($provider, $error_message);
+            error_log("KotacomAI API Rotator: Rate limit detected, attempting rotation");
+            $rotated = $this->rotate_api_key($provider, 'Rate limit: ' . $error_message);
             
             if ($rotated) {
+                error_log("KotacomAI API Rotator: Successfully rotated API key for provider: $provider");
                 return array(
                     'rotated' => true,
-                    'new_key' => $this->get_active_api_key($provider),
                     'message' => 'API key rotated due to rate limit'
                 );
             } else {
+                error_log("KotacomAI API Rotator: Failed to rotate - no alternative keys available");
                 return array(
                     'rotated' => false,
                     'message' => 'No alternative API keys available for rotation'
@@ -176,9 +230,10 @@ class KotacomAI_API_Key_Rotator {
             }
         }
         
+        error_log("KotacomAI API Rotator: Error does not indicate rate limiting");
         return array(
             'rotated' => false,
-            'message' => 'Error does not indicate rate limiting'
+            'message' => 'Error does not indicate rate limiting: ' . $error_message
         );
     }
     
@@ -345,5 +400,33 @@ class KotacomAI_API_Key_Rotator {
                 // Don't delete the old key yet for compatibility
             }
         }
+    }
+    
+    /**
+     * Debug method to check API key configuration
+     */
+    public function debug_api_keys($provider) {
+        $keys = $this->get_provider_keys($provider);
+        $active_index = get_option("kotacom_ai_{$provider}_active_key_index", 0);
+        $active_key = $this->get_active_api_key($provider);
+        $next_key = $this->get_next_available_key($provider);
+        
+        $debug_info = array(
+            'provider' => $provider,
+            'total_keys' => count($keys),
+            'active_index' => $active_index,
+            'active_key_length' => $active_key ? strlen($active_key) : 0,
+            'next_key_length' => $next_key ? strlen($next_key) : 0,
+            'keys_in_cooldown' => array()
+        );
+        
+        // Check which keys are in cooldown
+        for ($i = 0; $i < count($keys); $i++) {
+            if ($this->is_key_in_cooldown($provider, $i)) {
+                $debug_info['keys_in_cooldown'][] = $i;
+            }
+        }
+        
+        return $debug_info;
     }
 }
